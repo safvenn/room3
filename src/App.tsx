@@ -1,52 +1,148 @@
-import { Routes, Route, Navigate } from 'react-router-dom';
-import { useAuth } from '@/hooks/useAuth';
-import { AppLayout } from '@/components/AppLayout';
-import { AuthPage } from '@/pages/AuthPage';
-import { DashboardPage } from '@/pages/DashboardPage';
-import { TransactionsPage } from '@/pages/TransactionsPage';
-import { BudgetsPage } from '@/pages/BudgetsPage';
+import { BrowserRouter, Routes, Route, Navigate } from 'react-router-dom';
+import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
+import { Toaster } from 'react-hot-toast';
+import { useAuthStore } from './store/auth';
 
-function LoadingScreen() {
-  return (
-    <div className="loading-page">
-      <div style={{ fontSize: 40 }}>💰</div>
-      <div className="spinner" style={{ width: 32, height: 32 }} />
-      <p style={{ color: 'var(--clr-text-muted)', fontSize: 14 }}>Loading BudgetBuddy…</p>
-    </div>
-  );
-}
+// Pages
+import LoginPage from './pages/LoginPage';
+import RegisterPage from './pages/RegisterPage';
+import DashboardPage from './pages/DashboardPage';
+import FriendsPage from './pages/FriendsPage';
+import GroupsPage from './pages/GroupsPage';
+import AddExpensePage from './pages/AddExpensePage';
+import HistoryPage from './pages/HistoryPage';
+import SettlementsPage from './pages/SettlementsPage';
+import BudgetPage from './pages/BudgetPage';
+import AnalyticsPage from './pages/AnalyticsPage';
+import ProfilePage from './pages/ProfilePage';
+
+const queryClient = new QueryClient({
+  defaultOptions: {
+    queries: {
+      refetchOnWindowFocus: false,
+      retry: 1,
+    },
+  },
+});
 
 function ProtectedRoute({ children }: { children: React.ReactNode }) {
-  const { user, loading } = useAuth();
-  if (loading) return <LoadingScreen />;
-  if (!user) return <Navigate to="/auth" replace />;
-  return <>{children}</>;
+  const { isAuthenticated } = useAuthStore();
+  return isAuthenticated ? <>{children}</> : <Navigate to="/login" replace />;
+}
+
+function AnonymousRoute({ children }: { children: React.ReactNode }) {
+  const { isAuthenticated } = useAuthStore();
+  return !isAuthenticated ? <>{children}</> : <Navigate to="/dashboard" replace />;
 }
 
 export default function App() {
-  const { user, loading } = useAuth();
-
-  if (loading) return <LoadingScreen />;
-
   return (
-    <Routes>
-      <Route
-        path="/auth"
-        element={user ? <Navigate to="/" replace /> : <AuthPage />}
+    <QueryClientProvider client={queryClient}>
+      <BrowserRouter>
+        <Routes>
+          {/* Public Auth Routes */}
+          <Route
+            path="/login"
+            element={
+              <AnonymousRoute>
+                <LoginPage />
+              </AnonymousRoute>
+            }
+          />
+          <Route
+            path="/register"
+            element={
+              <AnonymousRoute>
+                <RegisterPage />
+              </AnonymousRoute>
+            }
+          />
+
+          {/* Protected Main Routes */}
+          <Route
+            path="/dashboard"
+            element={
+              <ProtectedRoute>
+                <DashboardPage />
+              </ProtectedRoute>
+            }
+          />
+          <Route
+            path="/friends"
+            element={
+              <ProtectedRoute>
+                <FriendsPage />
+              </ProtectedRoute>
+            }
+          />
+          <Route
+            path="/groups"
+            element={
+              <ProtectedRoute>
+                <GroupsPage />
+              </ProtectedRoute>
+            }
+          />
+          <Route
+            path="/add-expense"
+            element={
+              <ProtectedRoute>
+                <AddExpensePage />
+              </ProtectedRoute>
+            }
+          />
+          <Route
+            path="/history"
+            element={
+              <ProtectedRoute>
+                <HistoryPage />
+              </ProtectedRoute>
+            }
+          />
+          <Route
+            path="/settlements"
+            element={
+              <ProtectedRoute>
+                <SettlementsPage />
+              </ProtectedRoute>
+            }
+          />
+          <Route
+            path="/budget"
+            element={
+              <ProtectedRoute>
+                <BudgetPage />
+              </ProtectedRoute>
+            }
+          />
+          <Route
+            path="/analytics"
+            element={
+              <ProtectedRoute>
+                <AnalyticsPage />
+              </ProtectedRoute>
+            }
+          />
+          <Route
+            path="/profile"
+            element={
+              <ProtectedRoute>
+                <ProfilePage />
+              </ProtectedRoute>
+            }
+          />
+
+          {/* Fallback */}
+          <Route path="*" element={<Navigate to="/dashboard" replace />} />
+        </Routes>
+      </BrowserRouter>
+      <Toaster
+        position="top-center"
+        toastOptions={{
+          className: 'glass-panel text-primary font-semibold',
+          duration: 3000,
+        }}
       />
-      <Route
-        path="/"
-        element={
-          <ProtectedRoute>
-            <AppLayout />
-          </ProtectedRoute>
-        }
-      >
-        <Route index element={<DashboardPage />} />
-        <Route path="transactions" element={<TransactionsPage />} />
-        <Route path="budgets" element={<BudgetsPage />} />
-      </Route>
-      <Route path="*" element={<Navigate to="/" replace />} />
-    </Routes>
+    </QueryClientProvider>
   );
 }

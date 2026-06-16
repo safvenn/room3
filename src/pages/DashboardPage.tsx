@@ -1,297 +1,217 @@
-import { useMemo } from 'react';
-import { format, startOfMonth, endOfMonth } from 'date-fns';
-import {
-  AreaChart, Area, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer,
-  PieChart, Pie, Cell,
-} from 'recharts';
-import { TrendingUp, TrendingDown, Wallet, ArrowLeftRight } from 'lucide-react';
-import { useAuth } from '@/hooks/useAuth';
-import { useTransactions } from '@/hooks/useTransactions';
-import { useBudgets } from '@/hooks/useBudgets';
+import { useState, useEffect } from 'react';
+import { useNavigate } from 'react-router-dom';
+import Layout from '../components/layout/Layout';
+import { analyticsAPI, expensesAPI, budgetsAPI } from '../api/services';
+import type { DashboardData, Expense, Budget } from '../types';
+import { useAuthStore } from '../store/auth';
 
-const TODAY = new Date();
-const CURRENT_MONTH = format(TODAY, 'yyyy-MM');
+export default function DashboardPage() {
+  const navigate = useNavigate();
+  const { user } = useAuthStore();
+  const [dashboardData, setDashboardData] = useState<DashboardData | null>(null);
+  const [recentExpenses, setRecentExpenses] = useState<Expense[]>([]);
+  const [currentBudget, setCurrentBudget] = useState<Budget | null>(null);
+  const [loading, setLoading] = useState(true);
 
-function formatCurrency(amount: number) {
-  return new Intl.NumberFormat('en-US', { style: 'currency', currency: 'USD', maximumFractionDigits: 0 }).format(amount);
-}
+  useEffect(() => {
+    async function loadData() {
+      try {
+        setLoading(true);
+        // Load analytics summary
+        const dRes = await analyticsAPI.dashboard();
+        setDashboardData(dRes.data);
 
-export function DashboardPage() {
-  const { user } = useAuth();
-  const userId = user!.id;
+        // Load recent expenses
+        const eRes = await expensesAPI.list(0, 5);
+        setRecentExpenses(eRes.data.expenses || []);
 
-  const { transactions, loading: txLoading } = useTransactions({ userId, month: CURRENT_MONTH });
-  const { budgets, loading: budgetLoading } = useBudgets(userId, CURRENT_MONTH);
-
-  // ── Summary stats ────────────────────────────────────────
-  const stats = useMemo(() => {
-    const income = transactions.filter(t => t.type === 'income').reduce((s, t) => s + t.amount, 0);
-    const expense = transactions.filter(t => t.type === 'expense').reduce((s, t) => s + t.amount, 0);
-    return { income, expense, balance: income - expense, count: transactions.length };
-  }, [transactions]);
-
-  // ── Spending by category (for pie chart) ─────────────────
-  const categorySpend = useMemo(() => {
-    const map: Record<string, { name: string; value: number; color: string }> = {};
-    transactions
-      .filter(t => t.type === 'expense')
-      .forEach(t => {
-        const key = t.category_id;
-        if (!map[key]) map[key] = { name: t.category.name, value: 0, color: t.category.color };
-        map[key].value += t.amount;
-      });
-    return Object.values(map).sort((a, b) => b.value - a.value).slice(0, 6);
-  }, [transactions]);
-
-  // ── Daily spending (for area chart) ──────────────────────
-  const dailyData = useMemo(() => {
-    const start = startOfMonth(TODAY);
-    const end = endOfMonth(TODAY);
-    const days: Record<string, { date: string; income: number; expense: number }> = {};
-
-    for (let d = new Date(start); d <= end; d.setDate(d.getDate() + 1)) {
-      const key = format(d, 'yyyy-MM-dd');
-      days[key] = { date: format(d, 'MMM d'), income: 0, expense: 0 };
-    }
-
-    transactions.forEach(t => {
-      const key = t.date.slice(0, 10);
-      if (days[key]) {
-        if (t.type === 'income') days[key].income += t.amount;
-        else days[key].expense += t.amount;
+        // Load monthly budget (current month/year)
+        try {
+          const now = new Date();
+          const bRes = await budgetsAPI.get(now.getMonth() + 1, now.getFullYear());
+          setCurrentBudget(bRes.data);
+        } catch {
+          setCurrentBudget(null);
+        }
+      } catch (err) {
+        console.error('Failed to load dashboard data', err);
+      } finally {
+        setLoading(false);
       }
-    });
+    }
+    loadData();
+  }, []);
 
-    return Object.values(days).slice(0, new Date().getDate());
-  }, [transactions]);
+  const getCategoryIcon = (category: string) => {
+    switch (category) {
+      case 'Food': return 'restaurant';
+      case 'Travel': return 'flight';
+      case 'Shopping': return 'shopping_cart';
+      case 'Rent': return 'home';
+      case 'Entertainment': return 'movie';
+      default: return 'payments';
+    }
+  };
 
-  if (txLoading || budgetLoading) {
+  if (loading) {
     return (
-      <div className="loading-page">
-        <div className="spinner" style={{ width: 36, height: 36 }} />
-        <p style={{ color: 'var(--clr-text-muted)' }}>Loading dashboard…</p>
-      </div>
+      <Layout>
+        <div className="page-container space-y-6">
+          <div className="skeleton h-32 w-full" />
+          <div className="grid grid-cols-3 gap-4">
+            <div className="skeleton h-20" />
+            <div className="skeleton h-20" />
+            <div className="skeleton h-20" />
+          </div>
+          <div className="skeleton h-24 w-full" />
+          <div className="skeleton h-48 w-full" />
+        </div>
+      </Layout>
     );
   }
 
+  // Fallback data if API returns empty
+  const netBalance = dashboardData?.net_balance ?? 0;
+  const youOwe = dashboardData?.total_payable ?? 0;
+  const youAreOwed = dashboardData?.total_receivable ?? 0;
+
+  const budgetSpent = currentBudget?.spent ?? 0;
+  const budgetAmount = currentBudget?.amount ?? 0;
+  const budgetPct = budgetAmount > 0 ? Math.min(Math.round((budgetSpent / budgetAmount) * 100), 100) : 0;
+
   return (
-    <>
-      <div className="page-header">
-        <div>
-          <h1 className="page-title">Dashboard</h1>
-          <p className="page-subtitle">{format(TODAY, 'MMMM yyyy')} overview</p>
-        </div>
-      </div>
-
-      <div className="page-body">
-        {/* ── Stat cards ── */}
-        <div className="stats-grid">
-          <StatCard
-            label="Total Balance"
-            value={formatCurrency(stats.balance)}
-            icon={<Wallet size={18} color="#a78bfa" />}
-            iconBg="rgba(124,58,237,0.15)"
-            positive={stats.balance >= 0}
-          />
-          <StatCard
-            label="Income"
-            value={formatCurrency(stats.income)}
-            icon={<TrendingUp size={18} color="#10b981" />}
-            iconBg="rgba(16,185,129,0.15)"
-            positive={true}
-          />
-          <StatCard
-            label="Expenses"
-            value={formatCurrency(stats.expense)}
-            icon={<TrendingDown size={18} color="#f43f5e" />}
-            iconBg="rgba(244,63,94,0.15)"
-            positive={false}
-          />
-          <StatCard
-            label="Transactions"
-            value={String(stats.count)}
-            icon={<ArrowLeftRight size={18} color="#38bdf8" />}
-            iconBg="rgba(56,189,248,0.15)"
-          />
-        </div>
-
-        <div className="grid-2" style={{ marginBottom: 20 }}>
-          {/* ── Area chart ── */}
-          <div className="card">
-            <h2 style={{ fontSize: 15, fontWeight: 600, marginBottom: 16, color: 'var(--clr-text)' }}>
-              Cash Flow — {format(TODAY, 'MMM yyyy')}
-            </h2>
-            {dailyData.length === 0 ? (
-              <div className="empty-state" style={{ padding: '40px 0' }}>
-                <div className="empty-icon">📊</div>
-                <p className="empty-text">No transactions this month yet</p>
-              </div>
-            ) : (
-              <ResponsiveContainer width="100%" height={220}>
-                <AreaChart data={dailyData} margin={{ top: 5, right: 5, bottom: 5, left: 5 }}>
-                  <defs>
-                    <linearGradient id="incomeGrad" x1="0" y1="0" x2="0" y2="1">
-                      <stop offset="5%" stopColor="#10b981" stopOpacity={0.3} />
-                      <stop offset="95%" stopColor="#10b981" stopOpacity={0} />
-                    </linearGradient>
-                    <linearGradient id="expenseGrad" x1="0" y1="0" x2="0" y2="1">
-                      <stop offset="5%" stopColor="#f43f5e" stopOpacity={0.3} />
-                      <stop offset="95%" stopColor="#f43f5e" stopOpacity={0} />
-                    </linearGradient>
-                  </defs>
-                  <CartesianGrid strokeDasharray="3 3" stroke="rgba(255,255,255,0.05)" />
-                  <XAxis dataKey="date" tick={{ fill: '#7c8599', fontSize: 11 }} axisLine={false} tickLine={false} />
-                  <YAxis tick={{ fill: '#7c8599', fontSize: 11 }} axisLine={false} tickLine={false} width={50}
-                    tickFormatter={(v) => `$${v}`} />
-                  <Tooltip
-                    contentStyle={{ background: '#1a1a26', border: '1px solid rgba(255,255,255,0.08)', borderRadius: 10, color: '#e2e8f0' }}
-                    formatter={(v: unknown, name: unknown) => [formatCurrency(v as number), String(name).charAt(0).toUpperCase() + String(name).slice(1)]}
-                  />
-                  <Area type="monotone" dataKey="income" stroke="#10b981" strokeWidth={2} fill="url(#incomeGrad)" name="income" />
-                  <Area type="monotone" dataKey="expense" stroke="#f43f5e" strokeWidth={2} fill="url(#expenseGrad)" name="expense" />
-                </AreaChart>
-              </ResponsiveContainer>
-            )}
+    <Layout>
+      <div className="page-container page-enter">
+        {/* Net Balance Card */}
+        <section className="glass-panel rounded-2xl p-6 flex flex-col gap-4 relative overflow-hidden">
+          <div className="absolute -top-10 -right-10 w-32 h-32 bg-secondary-container rounded-full mix-blend-multiply filter blur-3xl opacity-35"></div>
+          
+          <div className="flex flex-col">
+            <span className="text-body-md text-on-surface-variant font-medium">Net Balance</span>
+            <span className={`font-display-currency text-display-currency ${netBalance >= 0 ? 'text-primary' : 'text-error'}`}>
+              ₹{Math.abs(netBalance).toLocaleString('en-IN')}
+            </span>
           </div>
 
-          {/* ── Pie chart ── */}
-          <div className="card">
-            <h2 style={{ fontSize: 15, fontWeight: 600, marginBottom: 16, color: 'var(--clr-text)' }}>
-              Spending by Category
-            </h2>
-            {categorySpend.length === 0 ? (
-              <div className="empty-state" style={{ padding: '40px 0' }}>
-                <div className="empty-icon">🍕</div>
-                <p className="empty-text">No expenses recorded yet</p>
-              </div>
-            ) : (
-              <div style={{ display: 'flex', alignItems: 'center', gap: 16 }}>
-                <ResponsiveContainer width={160} height={160}>
-                  <PieChart>
-                    <Pie data={categorySpend} cx="50%" cy="50%" innerRadius={45} outerRadius={72}
-                      paddingAngle={3} dataKey="value" stroke="none">
-                      {categorySpend.map((entry, i) => (
-                        <Cell key={i} fill={entry.color} />
-                      ))}
-                    </Pie>
-                    <Tooltip
-                      contentStyle={{ background: '#1a1a26', border: '1px solid rgba(255,255,255,0.08)', borderRadius: 10, color: '#e2e8f0' }}
-                      formatter={(v: unknown) => [formatCurrency(v as number)]}
-                    />
-                  </PieChart>
-                </ResponsiveContainer>
-                <div style={{ display: 'flex', flexDirection: 'column', gap: 8, flex: 1 }}>
-                  {categorySpend.map((item) => (
-                    <div key={item.name} style={{ display: 'flex', alignItems: 'center', gap: 8, justifyContent: 'space-between' }}>
-                      <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
-                        <div style={{ width: 10, height: 10, borderRadius: '50%', background: item.color, flexShrink: 0 }} />
-                        <span style={{ fontSize: 12, color: 'var(--clr-text-muted)' }}>{item.name}</span>
-                      </div>
-                      <span style={{ fontSize: 12, fontWeight: 600, color: 'var(--clr-text)' }}>{formatCurrency(item.value)}</span>
-                    </div>
-                  ))}
-                </div>
-              </div>
-            )}
-          </div>
-        </div>
+          <div className="w-full h-px bg-outline-variant/30 my-1" />
 
-        {/* ── Budget progress ── */}
-        {budgets.length > 0 && (
-          <div className="card" style={{ marginBottom: 20 }}>
-            <h2 style={{ fontSize: 15, fontWeight: 600, marginBottom: 16, color: 'var(--clr-text)' }}>Budget Progress</h2>
-            <div className="grid-auto">
-              {budgets.map((b) => {
-                const pct = Math.min((b.spent / b.amount) * 100, 100);
-                const over = b.spent > b.amount;
-                const color = over ? '#f43f5e' : pct > 75 ? '#f59e0b' : '#10b981';
-                return (
-                  <div className="budget-card" key={b.id}>
-                    <div className="budget-header">
-                      <div className="budget-category">
-                        <span className="budget-icon">{b.category.icon}</span>
-                        <div>
-                          <div className="budget-name">{b.category.name}</div>
-                          <div className="budget-amounts">{formatCurrency(b.spent)} of {formatCurrency(b.amount)}</div>
-                        </div>
-                      </div>
-                    </div>
-                    <div className="progress-bar-wrap">
-                      <div className="progress-bar-fill" style={{ width: `${pct}%`, background: color }} />
-                    </div>
-                    <div className="budget-footer">
-                      <span className="budget-remaining" style={{ color: over ? 'var(--clr-expense)' : 'var(--clr-income)' }}>
-                        {over ? `${formatCurrency(b.spent - b.amount)} over` : `${formatCurrency(b.amount - b.spent)} left`}
-                      </span>
-                      <span className="budget-pct">{pct.toFixed(0)}%</span>
-                    </div>
-                  </div>
-                );
-              })}
+          <div className="flex justify-between items-center">
+            <div className="flex flex-col">
+              <span className="text-label-caps text-on-surface-variant uppercase">You owe</span>
+              <span className="text-monetary-md text-error">₹{youOwe.toLocaleString('en-IN')}</span>
+            </div>
+            <div className="w-px h-8 bg-outline-variant/30" />
+            <div className="flex flex-col text-right">
+              <span className="text-label-caps text-on-surface-variant uppercase">You are owed</span>
+              <span className="text-monetary-md text-secondary">₹{youAreOwed.toLocaleString('en-IN')}</span>
             </div>
           </div>
-        )}
+        </section>
 
-        {/* ── Recent transactions ── */}
-        <div className="card">
-          <h2 style={{ fontSize: 15, fontWeight: 600, marginBottom: 16, color: 'var(--clr-text)' }}>
-            Recent Transactions
-          </h2>
-          {transactions.length === 0 ? (
-            <div className="empty-state">
-              <div className="empty-icon">💸</div>
-              <div className="empty-title">No transactions yet</div>
-              <div className="empty-text">Start adding transactions to see your financial activity here</div>
+        {/* Quick Actions */}
+        <section className="grid grid-cols-3 gap-4">
+          <button
+            onClick={() => navigate('/add-expense')}
+            className="flex flex-col items-center justify-center gap-2 p-3 glass-panel rounded-2xl active:scale-95 transition-transform hover:bg-white"
+          >
+            <div className="w-10 h-10 rounded-full bg-primary text-on-primary flex items-center justify-center">
+              <span className="material-symbols-outlined">add</span>
             </div>
+            <span className="text-label-caps text-primary text-center">Add Expense</span>
+          </button>
+          
+          <button
+            onClick={() => navigate('/settlements')}
+            className="flex flex-col items-center justify-center gap-2 p-3 glass-panel rounded-2xl active:scale-95 transition-transform hover:bg-white"
+          >
+            <div className="w-10 h-10 rounded-full bg-surface-container text-primary flex items-center justify-center border border-outline-variant/30">
+              <span className="material-symbols-outlined">payments</span>
+            </div>
+            <span className="text-label-caps text-primary text-center">Settle Up</span>
+          </button>
+
+          <button
+            onClick={() => navigate('/groups?create=true')}
+            className="flex flex-col items-center justify-center gap-2 p-3 glass-panel rounded-2xl active:scale-95 transition-transform hover:bg-white"
+          >
+            <div className="w-10 h-10 rounded-full bg-surface-container text-primary flex items-center justify-center border border-outline-variant/30">
+              <span className="material-symbols-outlined">group_add</span>
+            </div>
+            <span className="text-label-caps text-primary text-center">New Group</span>
+          </button>
+        </section>
+
+        {/* Monthly Budget */}
+        <section
+          onClick={() => navigate('/budget')}
+          className="glass-panel rounded-2xl p-4 flex flex-col gap-3 cursor-pointer hover:bg-white transition-colors"
+        >
+          <div className="flex justify-between items-end">
+            <span className="text-monetary-md text-primary font-semibold">Monthly Budget</span>
+            <span className="text-body-md text-on-surface-variant font-medium">
+              ₹{budgetSpent.toLocaleString('en-IN')} / {budgetAmount > 0 ? `₹${budgetAmount.toLocaleString('en-IN')}` : 'Not set'}
+            </span>
+          </div>
+          {budgetAmount > 0 ? (
+            <>
+              <div className="w-full h-2 rounded-full bg-surface-variant overflow-hidden">
+                <div 
+                  className={`h-full rounded-full transition-all duration-500 ${budgetPct >= 90 ? 'bg-error' : 'bg-secondary'}`}
+                  style={{ width: `${budgetPct}%` }}
+                />
+              </div>
+              <span className="text-label-caps text-on-surface-variant self-end uppercase">{budgetPct}% Used</span>
+            </>
           ) : (
-            <div className="transaction-list">
-              {transactions.slice(0, 8).map((tx) => (
-                <div className="transaction-item" key={tx.id}>
-                  <div className="tx-icon" style={{ background: `${tx.category.color}20` }}>
-                    {tx.category.icon}
-                  </div>
-                  <div className="tx-info">
-                    <div className="tx-title">{tx.title}</div>
-                    <div className="tx-meta">
-                      <span>{tx.category.name}</span>
-                      <span>·</span>
-                      <span>{format(new Date(tx.date), 'MMM d')}</span>
+            <span className="text-body-md text-on-surface-variant/60 italic text-sm">Tap to set up a monthly budget</span>
+          )}
+        </section>
+
+        {/* Recent Activity */}
+        <section className="flex flex-col gap-3">
+          <div className="flex justify-between items-center px-1">
+            <h2 className="text-headline-lg-mobile text-primary font-bold">Recent Activity</h2>
+            <button onClick={() => navigate('/history')} className="text-body-md text-primary hover:underline font-semibold">
+              See All
+            </button>
+          </div>
+
+          <div className="glass-panel rounded-2xl p-4 flex flex-col gap-0">
+            {recentExpenses.length === 0 ? (
+              <p className="py-6 text-center text-body-md text-on-surface-variant/60 italic">No recent expenses</p>
+            ) : (
+              recentExpenses.map((exp, idx) => (
+                <div key={exp.id}>
+                  {idx > 0 && <div className="w-full h-px bg-outline-variant/30 my-3" />}
+                  <div className="flex items-center justify-between">
+                    <div className="flex items-center gap-3">
+                      <div className="w-10 h-10 rounded-full bg-surface-variant flex items-center justify-center text-on-surface-variant">
+                        <span className="material-symbols-outlined">{getCategoryIcon(exp.category)}</span>
+                      </div>
+                      <div className="flex flex-col">
+                        <span className="text-body-md text-primary font-semibold truncate max-w-[150px]">{exp.title}</span>
+                        <span className="text-label-caps text-on-surface-variant">
+                          {new Date(exp.expense_date).toLocaleDateString('en-IN', { month: 'short', day: 'numeric' })} • {exp.category}
+                        </span>
+                      </div>
+                    </div>
+                    <div className="flex flex-col items-end">
+                      <span className="text-monetary-md text-primary font-bold">₹{exp.amount.toLocaleString('en-IN')}</span>
+                      <span className="text-label-caps text-on-surface-variant mt-0.5">
+                        {exp.paid_by === 'you' || exp.paid_by === user?.id ? (
+                          <span className="text-secondary-fixed-dim bg-secondary/15 px-2 py-0.5 rounded-full">Paid</span>
+                        ) : (
+                          <span className="text-error bg-error/10 px-2 py-0.5 rounded-full">Borrowed</span>
+                        )}
+                      </span>
                     </div>
                   </div>
-                  <div className={`tx-amount ${tx.type}`}>
-                    {tx.type === 'income' ? '+' : '-'}{formatCurrency(tx.amount)}
-                  </div>
                 </div>
-              ))}
-            </div>
-          )}
-        </div>
+              ))
+            )}
+          </div>
+        </section>
       </div>
-    </>
-  );
-}
-
-function StatCard({
-  label, value, icon, iconBg, positive,
-}: {
-  label: string;
-  value: string;
-  icon: React.ReactNode;
-  iconBg: string;
-  positive?: boolean;
-}) {
-  return (
-    <div className="stat-card">
-      <div className="stat-icon" style={{ background: iconBg }}>{icon}</div>
-      <div>
-        <div className="stat-value">{value}</div>
-        <div className="stat-label">{label}</div>
-      </div>
-      {positive !== undefined && (
-        <div className={`stat-change ${positive ? 'positive' : 'negative'}`}>
-          {positive ? '↑' : '↓'} This month
-        </div>
-      )}
-    </div>
+    </Layout>
   );
 }

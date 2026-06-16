@@ -3,5 +3,6 @@ dist/
 .env
 .env.local
 *.local
-room/
+
 .agents/
+room/
